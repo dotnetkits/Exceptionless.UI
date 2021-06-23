@@ -5,5 +5,8 @@ node_modules
 .sass-cache/
 src/results
 
-.idea/
+.chrome
+.idea
 src/.idea/
+.DS_Store
+src/html-angular-validate-report-checkstyle.xml

@@ -2,8 +2,12 @@
   'use strict';
 
   angular.module('app.event')
-    .controller('Event', function ($ExceptionlessClient, $scope, $state, $stateParams, $timeout, billingService, clipboard, errorService, eventService, filterService, hotkeys, linkService, notificationService, projectService, urlService, translateService) {
+    .controller('Event', function ($ExceptionlessClient, $scope, $state, $stateParams, $timeout, $window, billingService, clipboard, dialogService, errorService, eventService, filterService, hotkeys, linkService, notificationService, projectService, simpleErrorService, urlService, translateService) {
       var vm = this;
+
+      function activateSessionEventsTab() {
+        activateTab(translateService.T('Session Events'));
+      }
 
       function activateTab(tabName) {
         for(var index = 0; index < vm.tabs.length; index++) {
@@ -11,6 +15,10 @@
           if (tab.title !== tabName) {
             tab.active = false;
             continue;
+          }
+
+          if (tab.template_key === 'session') {
+            vm.sessionEventsTabActivated = true;
           }
 
           tab.active = true;
@@ -103,7 +111,11 @@
         vm.references = [];
 
         var referencePrefix = '@ref:';
-        angular.forEach(vm.event.data, function(data, key) {
+        angular.forEach(vm.event.data, function (data, key) {
+          if (key === '@ref:session') {
+            vm.referenceId = data;
+          }
+
           if (key.startsWith(referencePrefix)) {
             vm.references.push({ id: data, name: toSpacedWords(key.slice(5)) });
           }
@@ -113,10 +125,6 @@
       function buildTabs(tabNameToActivate) {
         var tabIndex = 0;
         var tabs = [{index: tabIndex, title: translateService.T('Overview'), template_key: 'overview'}];
-
-        if (vm.event.reference_id && vm.isSessionStart) {
-          tabs.push({index: ++tabIndex, title: translateService.T('Session Events'), template_key: 'session'});
-        }
 
         if (vm.event.data && vm.event.data['@error']) {
           tabs.push({index: ++tabIndex, title: translateService.T('Exception'), template_key: 'error'});
@@ -151,6 +159,10 @@
 
         if (extendedDataItems.length > 0) {
           tabs.push({index: ++tabIndex, title: translateService.T('Extended Data'), template_key: 'extended-data', data: extendedDataItems});
+        }
+
+        if (vm.referenceId) {
+          tabs.push({ index: ++tabIndex, title: translateService.T('Session Events'), template_key: 'session' });
         }
 
         vm.tabs = tabs;
@@ -238,6 +250,31 @@
         }
 
         function onSuccess(response) {
+          function getExceptions(event) {
+            var error = event.data && event.data['@error'];
+            if (error) {
+              return errorService.getExceptions(error);
+            }
+
+            var simpleError = event.data && event.data['@simple_error'];
+            return simpleErrorService.getExceptions(simpleError);
+          }
+
+          function getErrorData(event) {
+            var exceptions = getExceptions(event);
+            return exceptions
+              .map(function (ex, index, errors) {
+                var errorType = ex.type || 'Unknown';
+                return {
+                  title: index === 0 ? 'Additional Data' : errorType + ' Additional Data',
+                  type: errorType,
+                  message: ex.message,
+                  data: ex.data && ex.data['@ext']
+                };
+              })
+              .filter(function (errorData) { return !!errorData.data; });
+          }
+
           function getErrorType(event) {
             var error = event.data && event.data['@error'];
             if (error) {
@@ -275,14 +312,16 @@
           }
 
           vm.event = response.data.plain();
-          vm.event_json = angular.toJson(vm.event);
+          vm.event_json = angular.toJson(vm.event, true);
           vm.sessionEvents.relativeTo = vm.event.date;
+          vm.errorData = getErrorData(vm.event);
           vm.errorType = getErrorType(vm.event);
           vm.environment = vm.event.data && vm.event.data['@environment'];
           vm.location = getLocation(vm.event);
           vm.message = getMessage(vm.event);
           vm.hasError = vm.event.data && (vm.event.data['@error'] || vm.event.data['@simple_error']);
           vm.isSessionStart = vm.event.type === 'session';
+          vm.referenceId = vm.isSessionStart ? vm.event.reference_id : null;
           vm.level = vm.event.data && !!vm.event.data['@level'] ? vm.event.data['@level'].toLowerCase() : null;
           vm.isLevelSuccess = vm.level === 'trace' || vm.level === 'debug';
           vm.isLevelInfo = vm.level === 'info';
@@ -317,13 +356,13 @@
             return billingService.confirmUpgradePlan(response.data.message).then(function () {
                 return getEvent();
               }, function () {
-                $state.go('app.dashboard');
+                $state.go('app.frequent');
               }
             );
           }
 
-          $state.go('app.dashboard');
-          notificationService.error(translateService.T('Cannot_Find_Event', {eventId : $stateParams.id}));
+          $state.go('app.frequent');
+          notificationService.error(translateService.T('Cannot_Find_Event', { eventId : $stateParams.id }));
         }
 
         if (!vm._eventId) {
@@ -342,7 +381,7 @@
         }
 
         function onFailure() {
-          $state.go('app.dashboard');
+          $state.go('app.frequent');
         }
 
         if (!vm.event || !vm.event.project_id) {
@@ -389,7 +428,40 @@
         return projectService.promoteTab(vm.project.id, tabName).then(onSuccess, onFailure);
       }
 
+      function viewJSON() {
+        function onSuccess() {
+          $ExceptionlessClient.createFeatureUsage(vm._source + '.viewJSON.success')
+            .setProperty('id', vm._eventId)
+            .submit();
+        }
+
+        function onFailure() {
+          $ExceptionlessClient.createFeatureUsage(vm._source + '.viewJSON.error')
+            .setProperty('id', vm._eventId)
+            .submit();
+        }
+
+        $ExceptionlessClient.createFeatureUsage(vm._source + '.viewJSON')
+          .setProperty('id', vm._eventId)
+          .submit();
+
+        return dialogService.viewJSON(vm.event_json).then(onSuccess, onFailure);
+      }
+
+      function updateIsAccordionVisible() {
+        vm.isAccordionVisible = $window.innerWidth < 768;
+      }
+
       this.$onInit = function $onInit() {
+        updateIsAccordionVisible();
+        var window = angular.element($window);
+        window.bind('resize', updateIsAccordionVisible);
+
+        var unbind = $scope.$on('$destroy', function () {
+          unbind();
+          window.unbind('resize', updateIsAccordionVisible);
+        });
+
         vm._source = 'app.event.Event';
         vm._eventId = $stateParams.id;
         vm._knownDataKeys = ['error', '@error', '@simple_error', '@request', '@trace', '@environment', '@user', '@user_description', '@version', '@level', '@location', '@submission_method', '@submission_client', 'session_id', 'sessionend', 'haserror', '@stack'];
@@ -401,10 +473,12 @@
         vm.demoteTab = demoteTab;
         vm.event = {};
         vm.event_json = '';
+        vm.activateSessionEventsTab = activateSessionEventsTab;
         vm.textStackTrace = '';
         vm.excludedAdditionalData = ['@browser', '@browser_version', '@browser_major_version', '@device', '@os', '@os_version', '@os_major_version', '@is_bot'];
         vm.getCurrentTab = getCurrentTab;
         vm.getDuration = getDuration;
+        vm.errorData = [];
         vm.errorType = 'Unknown';
         vm.environment = {};
         vm.location = '';
@@ -430,28 +504,58 @@
         vm.project = {};
         vm.promoteTab = promoteTab;
         vm.references = [];
+        vm.referenceId = null;
         vm.sessionEvents = {
+          eventId: vm._eventId,
+          canRefresh: function canRefresh(events, data) {
+            if (data.type === 'PersistentEvent') {
+              // We are already listening to the stack changed event... This prevents a double refresh.
+              if (!data.deleted) {
+                return false;
+              }
+
+              // Refresh if the event id is set (non bulk) and the deleted event matches one of the events.
+              if (!!data.id && !!events) {
+                return events.filter(function (e) { return e.id === data.id; }).length > 0;
+              }
+
+              return data.project_id ? vm.event.project_id === data.project_id : vm.event.organization_id === data.organization_id;
+            }
+
+            if (data.type === 'Stack') {
+              return data.project_id ? vm.event.project_id === data.project_id : vm.event.organization_id === data.organization_id;
+            }
+
+            if (data.type === 'Project') {
+              return vm.event.project_id === data.id;
+            }
+
+            return data.type === 'Organization' && vm.event.organization_id === data.id;
+          },
           get: function (options) {
             function optionsCallback(options) {
               options.filter = '-type:heartbeat';
 
-              var start = moment.utc(vm.event.date).local();
+              var start = vm.isSessionStart ? moment.utc(vm.event.date).local() : moment.utc(vm.event.date).subtract(180, 'days').local();
               var end = (vm.event.data && vm.event.data.sessionend) ? moment.utc(vm.event.data.sessionend).add(1, 'seconds').local().format('YYYY-MM-DDTHH:mm:ss') : 'now';
               options.time = start.format('YYYY-MM-DDTHH:mm:ss') + '-' + end;
+
               return options;
             }
 
-            return eventService.getBySessionId(vm.event.project_id, vm.event.reference_id, options, optionsCallback);
+            return eventService.getBySessionId(vm.event.project_id, vm.referenceId, options, optionsCallback);
           },
           options: {
             limit: 10,
             mode: 'summary'
           },
-          source: vm._source + '.Recent',
+          source: vm._source + '.Events',
           timeHeaderText: 'Session Time',
           hideActions: true,
           hideSessionStartTime: true
         };
+        vm.sessionEventsTabActivated = false;
+        vm.viewJSON = viewJSON;
         vm.tabs = [];
 
         return getEvent().then(getProject).then(function () {

@@ -20,24 +20,30 @@
         var vm = this;
         function buildUrls() {
           function getOrganizationUrl(organization) {
-            if (isOnSessionDashboard()) {
+            if (isOnSessionEvents()) {
               return urlService.buildFilterUrl({ route: getStateName(), routePrefix: 'session', organizationId: organization.id });
+            } else if (isOnReports()) {
+              return urlService.buildFilterUrl({ moduleName: 'app.reports', route: 'status', organizationId: organization.id }, { status: filterService.getStatus() });
             }
 
             return urlService.buildFilterUrl({ route: getStateName(), organizationId: organization.id, type: $stateParams.type });
           }
 
           function getAllProjectsUrl() {
-            if (isOnSessionDashboard()) {
+            if (isOnSessionEvents()) {
               return urlService.buildFilterUrl({ route: getStateName(), routePrefix: 'session' });
+            } else if (isOnReports()) {
+              return urlService.buildFilterUrl({ moduleName: 'app.reports', route: 'status' }, { status: filterService.getStatus() });
             }
 
             return urlService.buildFilterUrl({ route: getStateName(), type: $stateParams.type });
           }
 
           function getProjectUrl(project) {
-            if (isOnSessionDashboard()) {
+            if (isOnSessionEvents()) {
               return urlService.buildFilterUrl({ route: getStateName(), routePrefix: 'session', projectId: project.id });
+            } else if (isOnReports()) {
+              return urlService.buildFilterUrl({ moduleName: 'app.reports', route: 'status', projectId: project.id }, { status: filterService.getStatus() });
             }
 
             return urlService.buildFilterUrl({ route: getStateName(), projectId: project.id, type: $stateParams.type });
@@ -166,19 +172,19 @@
             return 'new';
           }
 
-          if ($state.current.name.endsWith('recent')) {
-            return 'recent';
-          }
-
           if ($state.current.name.endsWith('users')) {
             return 'users';
           }
 
-          return 'dashboard';
+          return 'events';
         }
 
-        function isOnSessionDashboard() {
-          return $state.current.name.contains('session-') || $state.current.name === 'app.session.dashboard';
+        function isOnSessionEvents() {
+          return $state.current.name.contains('app.session-') || $state.current.name === 'app.session.events';
+        }
+
+        function isOnReports() {
+          return $state.current.name.contains('app.reports.');
         }
 
         function showSearch() {

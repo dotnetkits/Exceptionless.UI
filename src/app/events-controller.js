@@ -2,19 +2,26 @@
 (function () {
   'use strict';
 
-  angular.module('app.session')
-    .controller('session.Dashboard', function ($ExceptionlessClient, eventService, $filter, filterService, translateService) {
+  angular.module('app')
+    .controller('app.Events', function ($ExceptionlessClient, $filter, $stateParams, eventService, filterService, notificationService, organizationService, stackService, translateService) {
       var vm = this;
-      function get() {
-        function optionsCallback(options) {
-          options.filter += ' type:session';
-          if (vm.includeLiveFilter) {
-            options.filter += ' _missing_:data.sessionend';
-          }
-
-          return options;
+      function canRefresh(data) {
+        if (!!data && data.type === 'PersistentEvent' || data.type === 'Stack') {
+          return filterService.includedInProjectOrOrganizationFilter({ organizationId: data.organization_id, projectId: data.project_id });
         }
 
+        if (!!data && data.type === 'Organization' || data.type === 'Project') {
+          return filterService.includedInProjectOrOrganizationFilter({organizationId: data.id, projectId: data.id});
+        }
+
+        return !data;
+      }
+
+      function get() {
+        return getOrganizations().then(getStats).catch(function(e){});
+      }
+
+      function getStats() {
         function onSuccess(response) {
           function getAggregationValue(data, name, defaultValue) {
             var aggs = data.aggregations;
@@ -27,44 +34,52 @@
           }
 
           var results = response.data.plain();
+          var termsAggregation = getAggregationItems(results, 'terms_first', []);
+          var count = getAggregationValue(results, 'sum_count', 0);
           vm.stats = {
-            total: $filter('number')(results.total, 0),
-            users: $filter('number')(getAggregationValue(results, 'cardinality_user', 0), 0),
-            avg_duration: getAggregationValue(results, 'avg_value'),
-            avg_per_hour: $filter('number')(eventService.calculateAveragePerHour(results.total, vm._organizations), 1)
+            events: $filter('number')(count, 0),
+            stacks: $filter('number')(getAggregationValue(results, 'cardinality_stack', 0), 0),
+            newStacks: $filter('number')(termsAggregation.length > 0 ? termsAggregation[0].total : 0, 0),
+            avg_per_hour: $filter('number')(eventService.calculateAveragePerHour(count, vm._organizations), 1)
           };
 
           var dateAggregation = getAggregationItems(results, 'date_date', []);
           vm.chart.options.series[0].data = dateAggregation.map(function (item) {
-            return {x: moment(item.key).unix(), y: getAggregationValue(item, 'cardinality_user', 0), data: item};
+            return {x: moment(item.key).unix(), y: getAggregationValue(item, 'cardinality_stack', 0), data: item};
           });
 
           vm.chart.options.series[1].data = dateAggregation.map(function (item) {
-            return {x: moment(item.key).unix(), y: item.total || 0, data: item};
+            return {x: moment(item.key).unix(), y: getAggregationValue(item, 'sum_count', 0), data: item};
           });
         }
 
         var offset = filterService.getTimeOffset();
-        return eventService.count('avg:value cardinality:user date:(date' + (offset ? '^' + offset : '') + ' cardinality:user)', optionsCallback, false).then(onSuccess).catch(function(e){});
+        return eventService.count('date:(date' + (offset ? '^' + offset : '') + ' cardinality:stack sum:count~1) cardinality:stack terms:(first @include:true) sum:count~1', true).then(onSuccess);
       }
 
-      function updateLiveFilter(isLive) {
-        vm.includeLiveFilter = isLive;
-        filterService.fireFilterChanged(false);
+      function getOrganizations() {
+        function onSuccess(response) {
+          vm._organizations = response.data.plain();
+          return vm._organizations;
+        }
+
+        return organizationService.getAll().then(onSuccess);
       }
 
       this.$onInit = function $onInit() {
-        vm._source = 'app.session.Dashboard';
+        vm._organizations = [];
+        vm._source = 'app.Events';
+        vm.canRefresh = canRefresh;
         vm.chart = {
           options: {
             padding: {top: 0.085},
             renderer: 'stack',
             series: [{
-              name: translateService.T('Users'),
+              name: translateService.T('Stacks'),
               color: 'rgba(60, 116, 0, .9)',
               stroke: 'rgba(0, 0, 0, 0.15)'
             }, {
-              name: translateService.T('Sessions'),
+              name: translateService.T('Events'),
               color: 'rgba(124, 194, 49, .7)',
               stroke: 'rgba(0, 0, 0, 0.15)'
             }
@@ -113,7 +128,6 @@
               onSelection: function (position) {
                 var start = moment.unix(position.coordMinX).utc().local();
                 var end = moment.unix(position.coordMaxX).utc().local();
-
                 filterService.setTime(start.format('YYYY-MM-DDTHH:mm:ss') + '-' + end.format('YYYY-MM-DDTHH:mm:ss'));
                 $ExceptionlessClient.createFeatureUsage(vm._source + '.chart.range.onSelection')
                   .setProperty('start', start)
@@ -134,38 +148,25 @@
             }
           }
         };
-
         vm.get = get;
-        vm.includeLiveFilter = false;
-        vm.updateLiveFilter = updateLiveFilter;
-        vm.recentSessions = {
-          get: function (options) {
-            function optionsCallback(options) {
-              if (vm.includeLiveFilter) {
-                options.filter += ' _missing_:data.sessionend';
-              }
 
-              return options;
-            }
-
-            return eventService.getAllSessions(options, optionsCallback);
-          },
-          summary: {
-            showType: false
-          },
+        vm.events = {
+          header: 'Events',
+          get: eventService.getAll,
           options: {
-            limit: 10,
+            limit: 15,
             mode: 'summary'
           },
-          source: vm._source + '.Recent',
-          hideActions: true
+          source: vm._source + '.Events'
         };
         vm.stats = {
-          total: 0,
-          users: 0,
-          avg_duration: undefined,
+          events: 0,
+          stacks: 0,
+          newStacks: 0,
           avg_per_hour: 0.0
         };
+        vm.type = $stateParams.type || 'all';
+
         get();
       };
     });

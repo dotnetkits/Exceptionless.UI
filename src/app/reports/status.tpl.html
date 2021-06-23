@@ -4,8 +4,8 @@
   <div class="col">
     <div class="wrapper-md">
       <div class="panel panel-default">
-        <div class="panel-heading"><i class="fa fa-calendar"></i> {{::'Most Recent' | translate}}</div>
-        <events settings="vm.mostRecent"></events>
+        <div class="panel-heading"><i class="fa {{vm.icon}}"></i> {{vm.status | translate}}</div>
+        <stacks settings="vm.stacks"></stacks>
       </div>
     </div>
   </div>
